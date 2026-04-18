@@ -1,0 +1,44 @@
+#!/bin/sh
+cd "${0%/*}" || exit                                # Run from this directory
+. ${WM_PROJECT_DIR:?}/bin/tools/RunFunctions        # Include run functions
+
+# 1. Clean previous runs
+# This removes old time directories and log files to start fresh
+cleanCase
+rm -rf 0.[0-9]* [1-9]* postProcessing processor* log.* *.foam
+
+# 2. Generate the background mesh
+# Uses system/blockMeshDict
+runApplication blockMesh
+
+# 3. Carve the pillars using the STL
+# Uses system/snappyHexMeshDict and constant/triSurface/pillars.stl
+# The -overwrite flag ensures it doesn't create multiple '1', '2' folders
+runApplication snappyHexMesh -overwrite
+
+# 4. Correct mesh points and scales if necessary
+runApplication transformPoints -scale '(1 1 1)' 
+
+# 5. Handle Particle Injection Positions
+# If the GUI hasn't created one, we create a default starting point.
+# Format: (X Y Z)
+POS_FILE="constant/kinematicCloudPositions"
+if [ ! -f "$POS_FILE" ]; then
+    echo "(0.0005 0.0025 0.00005)" > "$POS_FILE"
+    echo ">>> [SYSTEM] Created default injection at (0.5mm, 2.5mm, 0.05mm)"
+fi
+
+# 6. Check for the existence of the '0' directory
+# snappyHexMesh sometimes moves files; we ensure '0' is ready for the solver
+if [ ! -d 0 ]; then
+    cp -r 0.orig 0 2>/dev/null || echo ">>> [WARNING] 0.orig not found, check initial conditions."
+fi
+
+# 7. Run the Lagrangian Solver
+# This solves the fluid field once and tracks the bacteria through it
+runApplication icoUncoupledKinematicParcelFoam
+
+# 8. Create ParaView dummy file for the GUI 'ParaView' button
+touch case.foam
+
+echo ">>> [COMPLETE] All stages finished successfully."
