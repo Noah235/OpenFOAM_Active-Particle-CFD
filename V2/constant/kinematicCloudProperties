@@ -1,0 +1,133 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  2512                                  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "constant";
+    object      kinematicCloudProperties;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+rho0Val     1100;
+dPart       1e-06;
+sigmaVal    1e-08;    
+eRest       0.8;      
+coupledVal  false;    
+
+solution
+{
+    active          true;
+    coupled         $coupledVal; 
+    transient       true;
+    trackInValidCells   false;
+    cellValueSourceCorrection false; 
+
+    interpolationSchemes 
+    { 
+        rho             cell;
+        U               cellPoint; 
+        mu              cell;
+    }
+    
+    integrationSchemes   
+    { 
+        U               Euler; 
+    }
+}
+
+constantProperties
+{
+    rho0            $rho0Val;
+    youngsModulus   1e6;
+    poissonsRatio   0.35;
+}
+
+subModels
+{
+    particleForces
+    {
+        nonSphereDrag
+        {
+            phi         0.8;
+        }
+        
+        
+    }
+
+    injectionModels
+    {
+        model1
+        {
+            type            coneInjection;
+            positionAxis    ( ( (-0.00018 0.0 0.0) (1 0 0) ) );
+            thetaInner      0;
+            thetaOuter      0;
+            Umag            constant 0.001;
+            parcelBasisType fixed;
+            nParticle       1;
+            
+            parcelsPerSecond 2000;
+            parcelsPerInjector 2000; // <--- Add this line for OF-v2512
+            
+            flowRateProfile constant 1.0; 
+            massTotal       1e-15; 
+            SOI             0;           
+            duration        1.0;         
+            sizeDistribution
+            {
+                type fixedValue;
+                fixedValueDistribution
+                {
+                    value   $dPart;
+                }
+            }
+        }
+    }
+
+    dispersionModel     none;
+
+    patchInteractionModel localInteraction;
+    localInteractionCoeffs
+    {
+        patches
+        (
+            "pillars.*"
+            {
+                type rebound;
+                eR   $eRest;
+                eN   $eRest;
+            }
+            "walls.*" 
+            { 
+                type rebound; 
+                eR   0.5; 
+                eN   0.5; 
+            }
+            "inlet"
+            {
+                type escape;
+            }
+            "outlet"
+            {
+                type escape;
+            }
+            // ADD THIS BLOCK:
+            "frontAndBack"
+            {
+                type rebound;
+                eR   1.0;
+                eN   1.0;
+            }
+        );
+    }
+
+    collisionModel          none;
+    stochasticCollisionModel none;
+    surfaceFilmModel        none;
+}
+// ************************************************************************* //

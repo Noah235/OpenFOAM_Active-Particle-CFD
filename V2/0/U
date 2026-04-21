@@ -1,0 +1,44 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  2512                                  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volVectorField;
+    object      U;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+uInlet  0.001; // GUI_PARAM_U_INLET
+
+dimensions      [0 1 -1 0 0 0 0];
+
+internalField   uniform (0 0 0);
+
+boundaryField
+{
+    inlet
+    {
+        type            fixedValue;
+        value           uniform (0.001 0 0); // (This is controlled by the GUI)
+    }
+    outlet
+    {
+        type            zeroGradient;
+    }
+    walls
+    {
+        type            slip; // <--- Changed from noSlip to slip
+    }
+    "pillars.*"
+    {
+        type            noSlip; // <--- Keep this as noSlip so the pillars act as physical obstacles!
+    }
+    frontAndBack
+    {
+        type            empty;
+    }
+}
