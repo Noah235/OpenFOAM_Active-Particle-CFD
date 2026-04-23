@@ -1,0 +1,134 @@
+#!/bin/sh
+#
+# Usage:
+#   ./Allrun                            # Run in current dir (debug/single-run)
+#   ./Allrun --case case_A1             # Run inside case_A1/ subdirectory
+#   ./Allrun --case case_A2 --mesh      # Same, but remesh first (in ../constant)
+#   ./Allrun --case case_B --no-flow    # Skip icoFoam (mesh-only for collisions)
+#
+# For comparison studies:
+#   The GUI creates case_A1/, case_A2/, case_B/ as sibling directories
+#   inside the working directory. Each contains a 0/ with case-specific
+#   initial conditions. The mesh lives in the parent ../constant/ and is
+#   symlinked into each case.
+
+# Where was Allrun invoked from? That's our WORK_DIR (the parent of case_*).
+# Allrun itself may live anywhere (symlinked from each case, or at root).
+WORK_DIR="$(pwd)"
+
+# --- Source OpenFOAM environment ---
+if [ -n "$WM_PROJECT_DIR" ] && [ -f "$WM_PROJECT_DIR/etc/bashrc" ]; then
+    OF_BASHRC="$WM_PROJECT_DIR/etc/bashrc"
+else
+    OF_BASHRC=""
+    for candidate in \
+        "/usr/lib/openfoam/openfoam2512/etc/bashrc" \
+        "$HOME/OpenFOAM/OpenFOAM-2512/etc/bashrc" \
+        "/opt/openfoam2512/etc/bashrc" \
+        "/opt/OpenFOAM/OpenFOAM-2512/etc/bashrc"
+    do
+        if [ -f "$candidate" ]; then
+            OF_BASHRC="$candidate"
+            break
+        fi
+    done
+fi
+
+if [ -z "$OF_BASHRC" ]; then
+    echo ">>> [ERROR] Cannot find OpenFOAM bashrc."
+    exit 1
+fi
+
+# shellcheck disable=SC1090
+. "$OF_BASHRC"
+. "${WM_PROJECT_DIR}/bin/tools/RunFunctions"
+
+# Parse flags
+DO_MESH=0
+SKIP_PARTICLES=0
+ZERO_FLUID=0
+NO_FLOW=0
+CASE_DIR=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --mesh) DO_MESH=1; shift ;;
+        --no-particles) SKIP_PARTICLES=1; shift ;;
+        --zero-fluid) ZERO_FLUID=1; shift ;;
+        --no-flow) NO_FLOW=1; shift ;;
+        --case) CASE_DIR="$2"; shift 2 ;;
+        *) echo ">>> [WARN] Unknown argument: $1"; shift ;;
+    esac
+done
+
+# If --case specified, operate INSIDE that subdirectory.
+# Mesh generation still happens in WORK_DIR (shared across cases).
+if [ -n "$CASE_DIR" ]; then
+    if [ ! -d "$WORK_DIR/$CASE_DIR" ]; then
+        echo ">>> [ERROR] Case directory not found: $WORK_DIR/$CASE_DIR"
+        exit 1
+    fi
+    echo ">>> [INIT] Operating in case subdirectory: $CASE_DIR"
+    # Remove only THIS case's old time directories (not the mesh)
+    echo ">>> [CLEANUP] Removing old time directories in $CASE_DIR/..."
+    cd "$WORK_DIR/$CASE_DIR" || exit 1
+    rm -rf [1-9]* 0.[0-9]* postProcessing processor* log.* *.foam particle_output
+    cd "$WORK_DIR" || exit 1
+else
+    echo ">>> [INIT] Operating in working directory (single-case mode)."
+    echo ">>> [CLEANUP] Removing old time directories..."
+    rm -rf [1-9]* 0.[0-9]* postProcessing processor* log.* *.foam particle_output
+fi
+
+# ---------------------------------------------------------------------------
+# STAGE 0: Mesh (always in WORK_DIR, shared across cases)
+# ---------------------------------------------------------------------------
+cd "$WORK_DIR" || exit 1
+
+if [ "$DO_MESH" -eq 1 ]; then
+    echo ">>> [STAGE 0] Generating mesh in $WORK_DIR..."
+    rm -rf constant/polyMesh
+    runApplication blockMesh
+    runApplication snappyHexMesh -overwrite
+    runApplication transformPoints -scale '(1 1 1)'
+else
+    echo ">>> [STAGE 0] Using existing polyMesh..."
+fi
+
+# Enter the case directory for fluid solve + particle tracking
+if [ -n "$CASE_DIR" ]; then
+    cd "$WORK_DIR/$CASE_DIR" || exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# STAGE 1: Fluid solve (icoFoam)
+# ---------------------------------------------------------------------------
+if [ "$ZERO_FLUID" -eq 0 ] && [ "$NO_FLOW" -eq 0 ]; then
+    echo ">>> [STAGE 1] Solving fluid with icoFoam in $(pwd)..."
+    runApplication icoFoam
+    touch case.foam
+elif [ "$NO_FLOW" -eq 1 ]; then
+    echo ">>> [STAGE 1] No-flow mode: skipping icoFoam, using mesh geometry only."
+    touch case.foam
+else
+    echo ">>> [STAGE 1] Zero-fluid mode: skipping icoFoam (no geometry either)."
+fi
+
+# ---------------------------------------------------------------------------
+# STAGE 2: Python particle tracker
+# ---------------------------------------------------------------------------
+# Tracker script lives in WORK_DIR (one script shared across cases).
+# We run it pointing at the CURRENT case (either WORK_DIR or case subdir).
+TRACKER="$WORK_DIR/particle_tracker.py"
+
+if [ "$SKIP_PARTICLES" -eq 0 ]; then
+    if [ ! -f "$TRACKER" ]; then
+        echo ">>> [ERROR] particle_tracker.py not found at $TRACKER"
+        exit 1
+    fi
+    echo ">>> [STAGE 2] Running run-and-tumble particle tracker..."
+    python3 "$TRACKER" --case . --output particle_output --config particle_config.json 2>&1 | tee log.particle_tracker
+else
+    echo ">>> [STAGE 2] Skipping particle tracker."
+fi
+
+echo ">>> [COMPLETE] Pipeline finished for $(pwd)."
